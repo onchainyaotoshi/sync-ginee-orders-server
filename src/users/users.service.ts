@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { PrismaService } from '../prisma.service'; // sesuaikan path kamu
+import { PrismaService } from '../prisma.service';
 
 @Injectable()
 export class UsersService {
@@ -22,10 +22,18 @@ export class UsersService {
       },
     });
   }
+
   async bumpTokenVersion(userId: string) {
     return this.prisma.user.update({
       where: { id: userId },
       data: { tokenVersion: { increment: 1 } },
+    });
+  }
+
+  async revokeAllRefreshTokens(userId: string) {
+    await this.prisma.refreshToken.updateMany({
+      where: { userId, revokedAt: null },
+      data: { revokedAt: new Date() },
     });
   }
 }

@@ -3,15 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { UsersService } from '../users/users.service';
-
-type JwtPayload = {
-  sub: string;
-  email: string;
-  role: string;
-  iat?: number;
-  exp?: number;
-  tokenVersion: number;
-};
+import type { AccessTokenPayload } from './auth.types';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
@@ -19,8 +11,8 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     config: ConfigService,
     private readonly users: UsersService,
   ) {
-    const secret = config.get<string>('JWT_SECRET');
-    if (!secret) throw new Error('JWT_SECRET is missing');
+    const secret = config.get<string>('JWT_ACCESS_SECRET');
+    if (!secret) throw new Error('JWT_ACCESS_SECRET is missing');
 
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
@@ -28,12 +20,14 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     });
   }
 
-  async validate(payload: JwtPayload) {
+  async validate(payload: AccessTokenPayload) {
     const user = await this.users.findById(payload.sub);
     if (!user) throw new UnauthorizedException('User not found');
-    if (payload.tokenVersion !== user.tokenVersion) {
+
+    if (user.tokenVersion !== payload.tokenVersion) {
       throw new UnauthorizedException('Token revoked');
     }
+
     return { id: user.id, email: user.email, role: user.role };
   }
 }

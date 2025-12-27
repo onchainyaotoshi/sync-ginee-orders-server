@@ -19,11 +19,11 @@ type MsString = `${number}${'ms' | 's' | 'm' | 'h' | 'd' | 'w' | 'y'}`;
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: (config: ConfigService): JwtModuleOptions => {
-        const secret = config.get<string>('JWT_SECRET');
-        if (!secret) throw new Error('JWT_SECRET is missing');
+        const secret = config.get<string>('JWT_ACCESS_SECRET');
+        if (!secret) throw new Error('JWT_ACCESS_SECRET is missing');
 
-        const expiresIn = (config.get<string>('JWT_EXPIRES_IN') ??
-          '7d') as MsString;
+        const expiresIn = (config.get<string>('JWT_ACCESS_EXPIRES_IN') ??
+          '15m') as MsString;
 
         return {
           secret,

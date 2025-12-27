@@ -22,4 +22,23 @@ model User {
   tokenVersion Int      @default(0)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  refreshTokens RefreshToken[]
+}
+
+model RefreshToken {
+  id          String   @id @default(cuid())
+  userId      String
+  tokenHash   String
+  revokedAt   DateTime?
+  createdAt   DateTime @default(now())
+  expiresAt   DateTime
+
+  // optional: info device
+  userAgent   String?
+  ip          String?
+
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([tokenHash])
 }
