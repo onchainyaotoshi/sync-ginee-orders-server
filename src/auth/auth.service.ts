@@ -21,7 +21,7 @@ export class AuthService {
     const hash = await bcrypt.hash(password, 10);
     const user = await this.users.create({ email, password: hash });
 
-    return this.issueToken(user.id, user.email, user.role);
+    return this.issueToken(user);
   }
 
   async login(email: string, password: string) {
@@ -31,12 +31,26 @@ export class AuthService {
     const ok = await bcrypt.compare(password, user.password);
     if (!ok) throw new UnauthorizedException('Invalid credentials');
 
-    return this.issueToken(user.id, user.email, user.role);
+    return this.issueToken(user);
   }
 
-  private async issueToken(userId: string, email: string, role: string) {
-    // payload minimal: sub (userId) + email + role
-    const payload = { sub: userId, email, role };
+  async logout(id: string){
+    return this.users.bumpTokenVersion(id);
+  }
+
+  private async issueToken(user: {
+    id: string;
+    email: string;
+    role: string;
+    tokenVersion: number;
+  }) {
+    const payload = {
+      sub: user.id,
+      email: user.email,
+      role: user.role,
+      tokenVersion: user.tokenVersion,
+    };
+
     return {
       access_token: await this.jwt.signAsync(payload),
     };

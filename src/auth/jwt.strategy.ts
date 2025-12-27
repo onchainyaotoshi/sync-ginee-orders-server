@@ -10,6 +10,7 @@ type JwtPayload = {
   role: string;
   iat?: number;
   exp?: number;
+  tokenVersion: number;
 };
 
 @Injectable()
@@ -30,7 +31,9 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   async validate(payload: JwtPayload) {
     const user = await this.users.findById(payload.sub);
     if (!user) throw new UnauthorizedException('User not found');
-
+    if (payload.tokenVersion !== user.tokenVersion) {
+      throw new UnauthorizedException('Token revoked');
+    }
     return { id: user.id, email: user.email, role: user.role };
   }
 }

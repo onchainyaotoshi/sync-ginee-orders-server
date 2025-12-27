@@ -22,4 +22,10 @@ export class UsersService {
       },
     });
   }
+  async bumpTokenVersion(userId: string) {
+    return this.prisma.user.update({
+      where: { id: userId },
+      data: { tokenVersion: { increment: 1 } },
+    });
+  }
 }

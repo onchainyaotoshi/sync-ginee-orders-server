@@ -21,7 +21,21 @@ export class AuthController {
 
   @UseGuards(JwtAuthGuard)
   @Get('me')
-  me(@Req() req: { user: { id: string; email: string; role: string } }) {
+  me(
+    @Req()
+    req: {
+      user: { id: string; email: string; role: string; tokenVersion: number };
+    },
+  ) {
     return req.user;
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('logout')
+  async logout(@Req() req: { user: { id: string } }) {
+    await this.auth.logout(req.user.id);
+    return {
+      success: true,
+    };
   }
 }
