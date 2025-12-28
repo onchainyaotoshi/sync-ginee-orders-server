@@ -1,55 +1,80 @@
-import {
-  Body,
-  Controller,
-  Get,
-  Param,
-  Post,
-  Req,
-  UseGuards,
-} from '@nestjs/common';
-import type { Request } from 'express';
+import { Body, Controller, Get, Param, Post } from '@nestjs/common';
+
 import { AuthService } from './auth.service';
-import { JwtAuthGuard } from './jwt-auth.guard';
+import { Public } from '../common/decorators/public.decorator';
+
+import {
+  ClientInfo,
+  type ClientInfoType,
+} from '../common/decorators/client-info.decorator';
+import {
+  CurrentUser,
+  type CurrentUserType,
+} from '../common/decorators/current-user.decorator';
 
 @Controller('auth')
 export class AuthController {
   constructor(private readonly auth: AuthService) {}
 
+  @Public()
   @Post('register')
   register(
     @Body() dto: { email: string; password: string },
-    @Req() req: Request,
+    @ClientInfo() client: ClientInfoType,
   ) {
-    return this.auth.register(dto.email, dto.password, req);
+    return this.auth.register(dto.email, dto.password, client);
   }
 
+  @Public()
   @Post('login')
-  login(@Body() dto: { email: string; password: string }, @Req() req: Request) {
-    return this.auth.login(dto.email, dto.password, req);
+  login(
+    @Body() dto: { email: string; password: string },
+    @ClientInfo() client: ClientInfoType,
+  ) {
+    return this.auth.login(dto.email, dto.password, client);
   }
 
+  @Public()
   @Post('refresh')
-  refresh(@Body('refresh_token') refreshToken: string, @Req() req: Request) {
-    return this.auth.refresh(refreshToken, req);
+  refresh(
+    @Body('refreshToken') refreshToken: string, // <-- konsisten camelCase
+    @ClientInfo() client: ClientInfoType,
+  ) {
+    return this.auth.refresh(refreshToken, client);
   }
 
-  @UseGuards(JwtAuthGuard)
-  @Post('logout')
-  logout(@Req() req: any) {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-member-access
-    return this.auth.logout(req.user.id);
+  // ✅ ini logout ALL devices (tokenVersion++)
+  @Post('logout-all')
+  logoutAll(@CurrentUser() user: CurrentUserType) {
+    return this.auth.logout(user.id);
   }
 
-  @UseGuards(JwtAuthGuard)
   @Get('me')
-  me(@Req() req: Request) {
-    return req.user; // ✅ typed, ESLint happy
+  me(@CurrentUser() user: CurrentUserType) {
+    return user;
   }
 
-  @UseGuards(JwtAuthGuard)
+  // ✅ list sessions per device
+  @Get('sessions')
+  listSessions(@CurrentUser() user: CurrentUserType) {
+    return this.auth.listSessions(user.id);
+  }
+
+  // ✅ revoke 1 session/device by sessionId (RefreshToken.id)
+  @Post('sessions/:id/revoke')
+  revokeSession(
+    @CurrentUser() user: CurrentUserType,
+    @Param('id') sessionId: string,
+  ) {
+    return this.auth.revokeSession(user.id, sessionId);
+  }
+
+  // ✅ admin force logout user (all devices)
   @Post('admin/force-logout/:id')
-  adminForceLogout(@Req() req: any, @Param('id') userId: string) {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-member-access
-    return this.auth.adminForceLogout(req.user, userId);
+  adminForceLogout(
+    @CurrentUser() user: CurrentUserType,
+    @Param('id') targetUserId: string,
+  ) {
+    return this.auth.adminForceLogout(user, targetUserId);
   }
 }

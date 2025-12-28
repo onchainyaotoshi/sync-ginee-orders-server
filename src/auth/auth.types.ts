@@ -14,3 +14,9 @@ export type RefreshTokenPayload = {
   iat?: number;
   exp?: number;
 };
+
+export type TokenPairResponse = {
+  accessToken: string;
+  refreshToken: string;
+  sessionId: string;
+};

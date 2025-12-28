@@ -2,27 +2,28 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
 import { v4 as uuidv4 } from 'uuid';
-import type { Request } from 'express';
 
 import { PrismaService } from '../prisma.service';
 import { UsersService } from '../users/users.service';
 import { sha256 } from './token-hash';
-import type { AccessTokenPayload, RefreshTokenPayload } from './auth.types';
 
-type MsString = `${number}${'ms' | 's' | 'm' | 'h' | 'd' | 'w' | 'y'}`;
+import type {
+  AccessTokenPayload,
+  RefreshTokenPayload,
+  TokenPairResponse,
+} from './auth.types';
+import type { ClientInfoType } from '../common/decorators/client-info.decorator';
+import type { MsString } from '../common/time/ms-string';
+import { expiresAtFrom } from '../common/time/expires-at';
 
-type UserForTokens = {
-  id: string;
-  email: string;
-  role: string;
-  tokenVersion: number;
-};
+import type { CurrentUserType } from '../common/decorators/current-user.decorator';
 
 @Injectable()
 export class AuthService {
@@ -33,8 +34,7 @@ export class AuthService {
     private readonly config: ConfigService,
   ) {}
 
-  // ---------- register/login (contoh) ----------
-  async register(email: string, password: string, req?: Request) {
+  async register(email: string, password: string, client: ClientInfoType) {
     const exists = await this.users.findByEmail(email);
     if (exists) throw new ConflictException('Email already registered');
 
@@ -44,10 +44,10 @@ export class AuthService {
       select: { id: true, email: true, role: true, tokenVersion: true },
     });
 
-    return this.issueTokens(user, req);
+    return this.issueTokens(user, client);
   }
 
-  async login(email: string, password: string, req?: Request) {
+  async login(email: string, password: string, client: ClientInfoType) {
     const user = await this.prisma.user.findUnique({
       where: { email },
       select: {
@@ -64,46 +64,29 @@ export class AuthService {
     const ok = await bcrypt.compare(password, user.password);
     if (!ok) throw new UnauthorizedException('Invalid credentials');
 
-    const safeUser: UserForTokens = {
+    const safeUser: CurrentUserType = {
       id: user.id,
       email: user.email,
       role: user.role,
       tokenVersion: user.tokenVersion,
     };
 
-    return this.issueTokens(safeUser, req);
+    return this.issueTokens(safeUser, client);
   }
 
-  // ---------- FORCE LOGOUT (self) ----------
-  async logout(userId: string) {
-    await this.prisma.refreshToken.updateMany({
-      where: { userId, revokedAt: null },
-      data: { revokedAt: new Date() },
-    });
-
-    await this.users.bumpTokenVersion(userId);
-
-    return { ok: true };
+  logout(userId: string) {
+    return this.users.revoke(userId);
   }
 
-  // ---------- ADMIN FORCE LOGOUT ----------
-  async adminForceLogout(
-    actor: { id: string; role: string },
-    targetUserId: string,
-  ) {
-    if (actor.role !== 'admin') throw new ForbiddenException('Admin only');
-
-    await this.prisma.refreshToken.updateMany({
-      where: { userId: targetUserId, revokedAt: null },
-      data: { revokedAt: new Date() },
-    });
-
-    await this.users.bumpTokenVersion(targetUserId);
-    return { ok: true, targetUserId };
+  adminForceLogout(user: CurrentUserType, targetUserId: string) {
+    if (user.role !== 'admin') throw new ForbiddenException('Admin only');
+    return this.users.revoke(targetUserId);
   }
 
-  // ---------- ISSUE TOKENS ----------
-  async issueTokens(user: UserForTokens, req?: Request) {
+  async issueTokens(
+    user: CurrentUserType,
+    client: ClientInfoType,
+  ): Promise<TokenPairResponse> {
     const accessSecret = this.mustGet('JWT_ACCESS_SECRET');
     const refreshSecret = this.mustGet('JWT_REFRESH_SECRET');
 
@@ -128,7 +111,6 @@ export class AuthService {
     };
 
     const [access_token, refresh_token] = await Promise.all([
-      // access pakai secret default dari JwtModule juga boleh. Ini explicit biar jelas.
       this.jwt.signAsync(accessPayload, {
         secret: accessSecret,
         expiresIn: accessExpiresIn,
@@ -139,25 +121,28 @@ export class AuthService {
       }),
     ]);
 
-    // simpan refresh token row dengan fingerprint deterministic
     const tokenHash = sha256(`${user.id}.${jti}`);
-    const expiresAt = this.expiresAtFrom(refreshExpiresIn);
+    const expiresAt = expiresAtFrom(refreshExpiresIn);
 
-    await this.prisma.refreshToken.create({
+    const session = await this.prisma.refreshToken.create({
       data: {
         userId: user.id,
         tokenHash,
         expiresAt,
-        userAgent: req?.headers['user-agent'],
-        ip: this.getIp(req),
+        userAgent: client.userAgent,
+        ip: client.ip,
       },
+      select: { id: true },
     });
 
-    return { access_token, refresh_token };
+    return {
+      accessToken: access_token,
+      refreshToken: refresh_token,
+      sessionId: session.id,
+    };
   }
 
-  // ---------- REFRESH (ROTATION) ----------
-  async refresh(refreshToken: string, req?: Request) {
+  async refresh(refreshToken: string, client: ClientInfoType) {
     const refreshSecret = this.mustGet('JWT_REFRESH_SECRET');
 
     let payload: RefreshTokenPayload;
@@ -172,17 +157,14 @@ export class AuthService {
     const userId = payload.sub;
     const { tokenVersion, jti } = payload;
 
-    // check user still valid & tokenVersion match
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
       select: { id: true, email: true, role: true, tokenVersion: true },
     });
     if (!user) throw new UnauthorizedException('User not found');
-    if (user.tokenVersion !== tokenVersion) {
+    if (user.tokenVersion !== tokenVersion)
       throw new UnauthorizedException('Token revoked');
-    }
 
-    // lookup refresh token record (deterministic)
     const tokenHash = sha256(`${userId}.${jti}`);
 
     const tokenRow = await this.prisma.refreshToken.findFirst({
@@ -198,53 +180,70 @@ export class AuthService {
     if (!tokenRow)
       throw new UnauthorizedException('Refresh token revoked/expired');
 
-    // rotate: revoke old + create new
     await this.prisma.refreshToken.update({
       where: { id: tokenRow.id },
       data: { revokedAt: new Date() },
     });
 
-    return this.issueTokens(user, req);
+    return this.issueTokens(user, client);
   }
 
-  // ---------- helpers ----------
+  async listSessions(userId: string) {
+    const now = new Date();
+
+    const rows = await this.prisma.refreshToken.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        createdAt: true,
+        expiresAt: true,
+        revokedAt: true,
+        userAgent: true,
+        ip: true,
+      },
+    });
+
+    return {
+      sessions: rows.map((r) => {
+        const isExpired = r.expiresAt <= now;
+        const isRevoked = !!r.revokedAt;
+
+        return {
+          id: r.id,
+          userAgent: r.userAgent,
+          ip: r.ip,
+          createdAt: r.createdAt,
+          expiresAt: r.expiresAt,
+          revokedAt: r.revokedAt,
+          status: isRevoked ? 'revoked' : isExpired ? 'expired' : 'active',
+        } as const;
+      }),
+    };
+  }
+
+  async revokeSession(userId: string, sessionId: string) {
+    const row = await this.prisma.refreshToken.findUnique({
+      where: { id: sessionId },
+      select: { id: true, userId: true, revokedAt: true },
+    });
+
+    if (!row) throw new NotFoundException('Session not found');
+    if (row.userId !== userId) throw new ForbiddenException('Not your session');
+
+    if (row.revokedAt) return { ok: true, id: sessionId, alreadyRevoked: true };
+
+    await this.prisma.refreshToken.update({
+      where: { id: sessionId },
+      data: { revokedAt: new Date() },
+    });
+
+    return { ok: true, id: sessionId };
+  }
+
   private mustGet(key: string) {
     const v = this.config.get<string>(key);
     if (!v) throw new Error(`${key} is missing`);
     return v;
-  }
-
-  private getIp(req?: Request): string | undefined {
-    if (!req) return undefined;
-    const xff = req.headers['x-forwarded-for'];
-    if (typeof xff === 'string') return xff.split(',')[0]?.trim();
-    // express adds this
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-member-access
-    return (req as any).ip;
-  }
-
-  private expiresAtFrom(expiresIn: MsString): Date {
-    const m = expiresIn.match(/^(\d+)(ms|s|m|h|d|w|y)$/);
-    if (!m) return new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-
-    const n = Number(m[1]);
-    const unit = m[2];
-
-    const mult =
-      unit === 'ms'
-        ? 1
-        : unit === 's'
-          ? 1000
-          : unit === 'm'
-            ? 60 * 1000
-            : unit === 'h'
-              ? 60 * 60 * 1000
-              : unit === 'd'
-                ? 24 * 60 * 60 * 1000
-                : unit === 'w'
-                  ? 7 * 24 * 60 * 60 * 1000
-                  : 365 * 24 * 60 * 60 * 1000; // y
-
-    return new Date(Date.now() + n * mult);
   }
 }

@@ -23,17 +23,10 @@ export class UsersService {
     });
   }
 
-  async bumpTokenVersion(userId: string) {
+  revoke(userId: string) {
     return this.prisma.user.update({
       where: { id: userId },
       data: { tokenVersion: { increment: 1 } },
-    });
-  }
-
-  async revokeAllRefreshTokens(userId: string) {
-    await this.prisma.refreshToken.updateMany({
-      where: { userId, revokedAt: null },
-      data: { revokedAt: new Date() },
     });
   }
 }
