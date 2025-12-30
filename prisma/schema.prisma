@@ -15,30 +15,145 @@ datasource db {
 }
 
 model User {
-  id        String   @id @default(cuid())
-  email     String   @unique
-  password  String
-  role      String   @default("user")
+  id           String   @id @default(cuid())
+  email        String   @unique
+  password     String
+  role         String   @default("user")
   tokenVersion Int      @default(0)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+
+  createdAt    DateTime @db.Timestamptz @default(now())
+  updatedAt    DateTime @db.Timestamptz @updatedAt
+
   refreshTokens RefreshToken[]
 }
 
 model RefreshToken {
-  id          String   @id @default(cuid())
-  userId      String
-  tokenHash   String
-  revokedAt   DateTime?
-  createdAt   DateTime @default(now())
-  expiresAt   DateTime
+  id        String   @id @default(cuid())
+  userId    String
+  tokenHash String
 
-  // optional: info device
-  userAgent   String?
-  ip          String?
+  revokedAt DateTime? @db.Timestamptz
+  createdAt DateTime  @db.Timestamptz @default(now())
+  expiresAt DateTime  @db.Timestamptz
 
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userAgent String?
+  ip        String?
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([tokenHash])
+}
+
+enum JobMasterState {
+  PENDING
+  PROCESSING
+  CONSENSUS_REACHED
+  SUCCESS
+  ERROR
+}
+
+model JobMaster {
+  id               BigInt         @id @default(autoincrement())
+  appName          String         @db.VarChar(255) @default("default")
+  jobDate          DateTime       @db.Date
+  parameters       Json
+  state            JobMasterState @default(PENDING)
+
+  error            Json?
+
+  consensusKey     String?
+  consensusAt      DateTime? @db.Timestamptz
+
+  finalizedAt      DateTime? @db.Timestamptz
+  finalizeAttempts Int       @default(0)
+
+  createdAt        DateTime  @db.Timestamptz @default(now())
+  updatedAt        DateTime  @db.Timestamptz @updatedAt
+
+  details          JobDetail[]
+  orders           GineeOrderMaster[]
+
+  @@unique([jobDate, appName])
+  @@index([state])
+}
+
+model JobDetail {
+  id              BigInt   @id @default(autoincrement())
+  jobMasterId     BigInt
+
+  executionStart  DateTime @db.Timestamptz @default(now())
+  executionEnd    DateTime? @db.Timestamptz
+  executionTimeMs Int?
+
+  result          Json?
+  error           Json?
+  resultKey       String?
+
+  createdAt       DateTime @db.Timestamptz @default(now())
+
+  jobMaster       JobMaster @relation(fields: [jobMasterId], references: [id], onDelete: Cascade)
+
+  @@index([jobMasterId])
+  @@index([jobMasterId, resultKey])
+}
+
+model GineeOrderMaster {
+  /// ===== Identity =====
+  orderId String @id @db.VarChar(64)
+
+  /// ===== Job trace (optional) =====
+  jobMasterId BigInt?
+  jobMaster   JobMaster? @relation(fields: [jobMasterId], references: [id])
+
+  /// ===== Ownership / Channel =====
+  country  String @db.Char(2)
+  channel  String @db.VarChar(32)
+  shopId   String @db.VarChar(64)
+
+  /// ===== Order classification =====
+  orderType     String? @db.VarChar(32)
+  orderStatus   String  @db.VarChar(32)
+  currency      String  @db.Char(3)
+
+  /// ===== Amount =====
+  totalAmount Decimal? @db.Decimal(18, 2)
+
+  /// ===== Payment =====
+  paymentMethod String? @db.VarChar(64)
+  isCod         Boolean
+
+  /// ===== External (Marketplace) =====
+  externalShopId        String? @db.VarChar(64)
+  externalOrderId       String? @db.VarChar(64)
+  externalOrderSn       String? @db.VarChar(64)
+  externalBookingSn     String? @db.VarChar(64)
+  externalOrderStatus   String? @db.VarChar(32)
+  externalCreateAt      DateTime? @db.Timestamptz
+  externalUpdateAt      DateTime? @db.Timestamptz
+
+  /// ===== Problem flags =====
+  problemOrderTypes String[] @db.VarChar(64)
+
+  /// ===== Important timestamps (UTC) =====
+  createAt             DateTime @db.Timestamptz
+  payAt                DateTime? @db.Timestamptz
+  purchasedOn          DateTime? @db.Timestamptz
+  closeAt              DateTime? @db.Timestamptz
+  lastUpdateAt         DateTime @db.Timestamptz
+  promisedToShipBefore DateTime? @db.Timestamptz
+  totalQuantity        BigInt
+
+  /// ===== Optional metadata =====
+  customerName String? @db.VarChar(128)
+
+  /// ===== Audit =====
+  createdAt DateTime @default(now()) @db.Timestamptz
+  updatedAt DateTime @updatedAt @db.Timestamptz
+
+  @@index([jobMasterId])
+  @@index([shopId, createAt])
+  @@index([channel, createAt])
+  @@index([orderStatus])
+  @@index([externalOrderId])
 }

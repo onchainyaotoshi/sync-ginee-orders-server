@@ -1,25 +1,77 @@
 import { Controller, Get, ServiceUnavailableException } from '@nestjs/common';
 import { PrismaService } from './prisma.service';
+import { Public } from './common/decorators/public.decorator';
 
+function getErrorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  return 'Unknown error';
+}
+
+@Public()
 @Controller('health')
 export class HealthController {
   constructor(private readonly prisma: PrismaService) {}
 
+  @Get('time')
+  async time() {
+    const appNow = new Date();
+
+    try {
+      const tzRows = await this.prisma.$queryRaw<
+        { TimeZone: string }[]
+      >`SHOW TIMEZONE`;
+
+      const nowRows = await this.prisma.$queryRaw<
+        { now: Date }[]
+      >`SELECT now()`;
+
+      const dbTimezone = tzRows[0]?.TimeZone ?? 'unknown';
+      const dbNow = nowRows[0]?.now;
+
+      return {
+        ok: true,
+
+        application: {
+          timezone:
+            Intl.DateTimeFormat().resolvedOptions().timeZone ??
+            process.env.TZ ??
+            'unknown',
+          now: appNow.toISOString(),
+          nowLocal: appNow.toString(),
+        },
+
+        database: {
+          timezone: dbTimezone,
+          now: dbNow?.toISOString(),
+          nowLocal: dbNow?.toString(),
+        },
+      };
+    } catch (err: unknown) {
+      throw new ServiceUnavailableException({
+        ok: false,
+        message: getErrorMessage(err),
+      });
+    }
+  }
+
   @Get('db')
   async db() {
     const start = Date.now();
+
     try {
-      await this.prisma.$queryRaw`SELECT 1`;
-      return { ok: true, db: 'up', latencyMs: Date.now() - start };
-    } catch (err: any) {
+      await this.prisma.$queryRaw<[{ result: number }]>`SELECT 1 AS result`;
+
+      return {
+        ok: true,
+        db: 'up',
+        latencyMs: Date.now() - start,
+      };
+    } catch (err: unknown) {
       throw new ServiceUnavailableException({
         ok: false,
         db: 'down',
         latencyMs: Date.now() - start,
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
-        message: err?.message ?? 'Database connection failed',
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
-        code: err?.code,
+        message: getErrorMessage(err),
       });
     }
   }
