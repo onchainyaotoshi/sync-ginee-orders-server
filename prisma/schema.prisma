@@ -49,13 +49,20 @@ enum JobMasterState {
   PENDING
   PROCESSING
   CONSENSUS_REACHED
-  SUCCESS
+  DETAIL_FETCHED
   ERROR
+  COMPLETE
+}
+
+enum IncrementalSyncHistoryState {
+  PROCESSING
+  ERROR
+  COMPLETE
 }
 
 model JobMaster {
   id               BigInt         @id @default(autoincrement())
-  appName          String         @db.VarChar(255) @default("default")
+  appName          String         @db.VarChar(256) @default("default")
   jobDate          DateTime       @db.Date
   parameters       Json
   state            JobMasterState @default(PENDING)
@@ -64,15 +71,20 @@ model JobMaster {
 
   consensusKey     String?
   consensusAt      DateTime? @db.Timestamptz
+  
+  detailFetchAt    DateTime? @db.Timestamptz
 
   finalizedAt      DateTime? @db.Timestamptz
   finalizeAttempts Int       @default(0)
+  
 
   createdAt        DateTime  @db.Timestamptz @default(now())
   updatedAt        DateTime  @db.Timestamptz @updatedAt
 
   details          JobDetail[]
   orders           GineeOrderMaster[]
+  orderItems       GineeOrderItem[]
+  orderDetails     GineeOrderDetail[]
 
   @@unique([jobDate, appName])
   @@index([state])
@@ -100,40 +112,40 @@ model JobDetail {
 
 model GineeOrderMaster {
   /// ===== Identity =====
-  orderId String @id @db.VarChar(64)
+  orderId String @id @db.VarChar(256)
 
   /// ===== Job trace (optional) =====
   jobMasterId BigInt?
-  jobMaster   JobMaster? @relation(fields: [jobMasterId], references: [id])
+  jobMaster   JobMaster? @relation(fields: [jobMasterId], references: [id], onDelete: Cascade)
 
   /// ===== Ownership / Channel =====
   country  String @db.Char(2)
-  channel  String @db.VarChar(32)
-  shopId   String @db.VarChar(64)
+  channel  String @db.VarChar(256)
+  shopId   String @db.VarChar(256)
 
   /// ===== Order classification =====
-  orderType     String? @db.VarChar(32)
-  orderStatus   String  @db.VarChar(32)
+  orderType     String? @db.VarChar(256)
+  orderStatus   String  @db.VarChar(256)
   currency      String  @db.Char(3)
 
   /// ===== Amount =====
   totalAmount Decimal? @db.Decimal(18, 2)
 
   /// ===== Payment =====
-  paymentMethod String? @db.VarChar(64)
+  paymentMethod String? @db.VarChar(256)
   isCod         Boolean
 
   /// ===== External (Marketplace) =====
-  externalShopId        String? @db.VarChar(64)
-  externalOrderId       String? @db.VarChar(64)
-  externalOrderSn       String? @db.VarChar(64)
-  externalBookingSn     String? @db.VarChar(64)
-  externalOrderStatus   String? @db.VarChar(32)
+  externalShopId        String? @db.VarChar(256)
+  externalOrderId       String? @db.VarChar(256)
+  externalOrderSn       String? @db.VarChar(256)
+  externalBookingSn     String? @db.VarChar(256)
+  externalOrderStatus   String? @db.VarChar(256)
   externalCreateAt      DateTime? @db.Timestamptz
   externalUpdateAt      DateTime? @db.Timestamptz
 
   /// ===== Problem flags =====
-  problemOrderTypes String[] @db.VarChar(64)
+  problemOrderTypes String[] @db.VarChar(256)
 
   /// ===== Important timestamps (UTC) =====
   createAt             DateTime @db.Timestamptz
@@ -145,15 +157,120 @@ model GineeOrderMaster {
   totalQuantity        BigInt
 
   /// ===== Optional metadata =====
-  customerName String? @db.VarChar(128)
+  customerName String? @db.VarChar(256)
 
   /// ===== Audit =====
   createdAt DateTime @default(now()) @db.Timestamptz
   updatedAt DateTime @updatedAt @db.Timestamptz
 
+  details GineeOrderDetail[]
+  items GineeOrderItem[]
+
   @@index([jobMasterId])
   @@index([shopId, createAt])
   @@index([channel, createAt])
   @@index([orderStatus])
+  @@index([externalOrderSn])
+  @@index([externalBookingSn])
   @@index([externalOrderId])
+}
+
+model GineeOrderDetail {
+  /// ===== Identity =====
+  id BigInt @id @default(autoincrement())
+
+  /// ===== Parent order =====
+  orderId String @db.VarChar(256)
+  order   GineeOrderMaster @relation(fields: [orderId], references: [orderId], onDelete: Cascade)
+
+  /// ===== Ingestion job (provenance) =====
+  jobMasterId BigInt?
+  jobMaster   JobMaster? @relation(fields: [jobMasterId], references: [id], onDelete: Cascade)
+
+  invoiceInfo          Json? @db.JsonB
+  shippingDocumentInfo Json? @db.JsonB
+  shipInfo             Json? @db.JsonB
+  printInfo            Json? @db.JsonB
+  extraInfo            Json? @db.JsonB
+  cancelInfo           Json? @db.JsonB
+  logisticsInfos       Json? @db.JsonB
+  shippingAddressInfo  Json? @db.JsonB
+  paymentInfo          Json? @db.JsonB
+  customerInfo         Json? @db.JsonB
+
+  /// ===== Audit =====
+  createdAt DateTime @default(now()) @db.Timestamptz
+  updatedAt DateTime @updatedAt @db.Timestamptz
+
+  @@index([orderId])
+  @@index([jobMasterId])
+}
+
+model GineeOrderItem {
+  /// ===== Identity =====
+  itemId String @id @db.VarChar(256)
+
+  /// ===== Parent order =====
+  orderId String @db.VarChar(256)
+  order   GineeOrderMaster @relation(fields: [orderId], references: [orderId], onDelete: Cascade)
+
+  /// ===== Ingestion job (provenance) =====
+  jobMasterId BigInt?
+  jobMaster   JobMaster? @relation(fields: [jobMasterId], references: [id], onDelete: Cascade)
+
+  /// ===== Product info =====
+  productName     String? @db.VarChar(256)
+  productImageUrl String? @db.VarChar(512)
+  variationName   String? @db.VarChar(256)
+
+  spu           String? @db.VarChar(256)
+  sku           String? @db.VarChar(256)
+  masterSku     String? @db.VarChar(256)
+  masterSkuType String? @db.VarChar(256)
+
+  /// ===== Quantity & pricing =====
+  quantity           Int
+  actualPrice        Decimal? @db.Decimal(18, 2)
+  actualTotalPrice   Decimal? @db.Decimal(18, 2)
+  originalPrice      Decimal? @db.Decimal(18, 2)
+  originalTotalPrice Decimal? @db.Decimal(18, 2)
+  discountedPrice    Decimal? @db.Decimal(18, 2)
+
+  /// ===== External ids / status =====
+  externalItemId          String? @db.VarChar(256)
+  externalVariationId     String? @db.VarChar(256)
+  externalProductId       String? @db.VarChar(256)
+  externalOrderItemStatus String? @db.VarChar(256)
+
+  /// ===== Flags =====
+  isGift             Boolean?
+  isFulfilByPlatform Boolean?
+
+  /// ===== JSONB payloads =====
+  bundleSkus           Json? @db.JsonB
+
+  /// ===== Audit =====
+  createdAt DateTime @default(now()) @db.Timestamptz
+  updatedAt DateTime @updatedAt @db.Timestamptz
+
+  @@index([orderId])
+  @@index([jobMasterId])
+  @@index([sku])
+  @@index([masterSku])
+  @@index([externalItemId])
+}
+
+model IncrementalSyncHistory {
+  id            BigInt @id @default(autoincrement())
+  appName       String @db.VarChar(256) @default("default")
+  parameters    Json
+  error         Json?
+  consensusKey  String?
+  createdAt     DateTime @default(now()) @db.Timestamptz
+  updatedAt     DateTime @updatedAt @db.Timestamptz
+  state         IncrementalSyncHistoryState @default(PROCESSING)
+  result        Json?
+  executionStart  DateTime @db.Timestamptz @default(now())
+  executionEnd    DateTime? @db.Timestamptz
+  executionTimeMs Int?
 }

@@ -1,0 +1,2 @@
+-- AlterEnum
+ALTER TYPE "JobMasterState" ADD VALUE 'DETAIL_FETCHED';

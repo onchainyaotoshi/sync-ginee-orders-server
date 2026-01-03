@@ -1,6 +1,6 @@
 import { Controller, Get, ServiceUnavailableException } from '@nestjs/common';
-import { PrismaService } from './prisma.service';
-import { Public } from './common/decorators/public.decorator';
+import { PrismaService } from 'src/prisma/prisma.service';
+import { Public } from 'src/common/decorators/public.decorator';
 
 function getErrorMessage(err: unknown): string {
   if (err instanceof Error) return err.message;
